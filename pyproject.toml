@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "financial-customer-service"
+version = "0.1.0"
+description = "A minimal LangChain financial customer service agent powered by DeepSeek V4."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "langchain>=1.0,<2.0",
+    "langchain-deepseek>=1.0,<2.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10.0",
+]
+
+[project.scripts]
+financial-agent = "app.cli:run_cli"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

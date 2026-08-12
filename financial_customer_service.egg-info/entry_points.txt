@@ -1,0 +1,2 @@
+[console_scripts]
+financial-agent = app.cli:run_cli

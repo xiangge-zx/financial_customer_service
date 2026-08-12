@@ -1,0 +1,6 @@
+langchain<2.0,>=1.0
+langchain-deepseek<2.0,>=1.0
+python-dotenv<2.0,>=1.0
+
+[dev]
+pytest<10.0,>=8.0

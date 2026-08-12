@@ -1,3 +1,15 @@
+Metadata-Version: 2.4
+Name: financial-customer-service
+Version: 0.1.0
+Summary: A minimal LangChain financial customer service agent powered by DeepSeek V4.
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: langchain<2.0,>=1.0
+Requires-Dist: langchain-deepseek<2.0,>=1.0
+Requires-Dist: python-dotenv<2.0,>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest<10.0,>=8.0; extra == "dev"
+
 # 财经客服 Agent
 
 这是第一版最小实现：使用 LangChain `create_agent` 创建单 Agent，模型接入 DeepSeek V4，财经客服身份与能力边界放在独立提示词模块中。
