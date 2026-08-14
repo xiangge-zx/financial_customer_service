@@ -1,5 +1,10 @@
 langchain<2.0,>=1.0
 langchain-deepseek<2.0,>=1.0
+langchain-community<1.0,>=0.4
+langchain-text-splitters<2.0,>=1.0
+langchain-huggingface<2.0,>=1.0
+faiss-cpu<2.0,>=1.9
+sentence-transformers<6.0,>=3.0
 python-dotenv<2.0,>=1.0
 
 [dev]

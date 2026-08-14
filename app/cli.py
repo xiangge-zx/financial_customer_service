@@ -35,7 +35,7 @@ def run_cli() -> None:
 
     messages: list[Any] = []
     print("财经客服 Agent 已启动。输入“退出”结束会话。")
-    print("提醒：第一版没有联网、行情、账户或业务系统查询能力。")
+    print("已启用 knowledge/ 知识库检索；仍无联网、行情、账户或外部业务系统查询能力。")
 
     while True:
         try:

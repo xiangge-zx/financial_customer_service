@@ -1,17 +1,24 @@
-"""创建不绑定任何业务工具的 LangChain 财经客服 Agent。"""
+"""接入本地知识库检索工具的 LangChain 财经客服 Agent。"""
 
 from langchain.agents import create_agent
+from langchain_core.embeddings import Embeddings
 from langchain_deepseek import ChatDeepSeek
 from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings
 from app.prompts import FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT
+from app.rag import build_or_load_vector_store, create_search_tool
 
 
-def create_financial_agent(settings: Settings | None = None) -> CompiledStateGraph:
-    """创建第一版财经客服 Agent。
+def create_financial_agent(
+    settings: Settings | None = None,
+    *,
+    embeddings: Embeddings | None = None,
+) -> CompiledStateGraph:
+    """创建带 RAG 检索能力的财经客服 Agent。
 
-    第一版只依赖大模型自身知识，不注册查询、计算或写入类工具。
+    Agent 可通过 search_project_knowledge 搜索 knowledge/ 业务文档；
+    仍不注册实时行情、账户或外部业务系统查询工具。
     """
     resolved_settings = settings or Settings.from_env()
 
@@ -25,9 +32,18 @@ def create_financial_agent(settings: Settings | None = None) -> CompiledStateGra
         max_retries=resolved_settings.max_retries,
     )
 
+    vector_store = build_or_load_vector_store(
+        resolved_settings,
+        embeddings=embeddings,
+    )
+    search_tool = create_search_tool(
+        vector_store,
+        top_k=resolved_settings.rag_top_k,
+    )
+
     return create_agent(
         model=model,
-        tools=[],
+        tools=[search_tool],
         system_prompt=FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT,
         name="financial_customer_service_agent",
     )

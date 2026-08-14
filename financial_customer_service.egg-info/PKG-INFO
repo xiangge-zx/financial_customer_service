@@ -6,20 +6,26 @@ Requires-Python: <3.14,>=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: langchain<2.0,>=1.0
 Requires-Dist: langchain-deepseek<2.0,>=1.0
+Requires-Dist: langchain-community<1.0,>=0.4
+Requires-Dist: langchain-text-splitters<2.0,>=1.0
+Requires-Dist: langchain-huggingface<2.0,>=1.0
+Requires-Dist: faiss-cpu<2.0,>=1.9
+Requires-Dist: sentence-transformers<6.0,>=3.0
 Requires-Dist: python-dotenv<2.0,>=1.0
 Provides-Extra: dev
 Requires-Dist: pytest<10.0,>=8.0; extra == "dev"
 
 # 财经客服 Agent
 
-这是第一版最小实现：使用 LangChain `create_agent` 创建单 Agent，模型接入 DeepSeek V4，财经客服身份与能力边界放在独立提示词模块中。
+使用 LangChain `create_agent` 创建单 Agent，模型接入 DeepSeek V4。Agent 可通过本地 RAG 工具搜索 `knowledge/` 中的业务文档，回答开户、理财、FAQ 等问题。
 
-当前版本不注册任何 Tool，因此不能查询实时行情、用户账户、订单、数据库或最新政策。它适合验证 Agent 创建、提示词效果和基础多轮对话。
+当前版本**没有**联网、实时行情、账户、订单或外部业务系统查询能力。它适合验证 Agent 创建、提示词效果、知识库检索和基础多轮对话。
 
 ## 环境要求
 
 - Python 3.11～3.13
 - DeepSeek API Key
+- 首次构建索引时会下载本地中文 Embedding 模型（`BAAI/bge-small-zh-v1.5`，约百 MB）
 
 ## 安装
 
@@ -39,6 +45,24 @@ Copy-Item .env.example .env
 DEEPSEEK_MODEL=deepseek-v4-pro
 ```
 
+## 知识库与 RAG
+
+把业务说明放进 `knowledge/`（支持 `.md` / `.txt`）。启动时会：
+
+1. 扫描知识库并分块
+2. 用本地 Embedding 写入 FAISS 索引（缓存目录默认 `.rag_index/`）
+3. 源文件变更后自动重建索引
+
+示例文档：
+
+- `knowledge/开户与账户.md`
+- `knowledge/理财产品说明.md`
+- `knowledge/常见问题.md`
+
+对话中询问业务问题时，Agent 可调用 `search_project_knowledge` 检索并引用这些文档。
+
+常用 RAG 环境变量见 `.env.example`（如 `RAG_KNOWLEDGE_DIR`、`RAG_TOP_K`、`EMBEDDING_MODEL`）。
+
 ## 运行
 
 ```powershell
@@ -53,6 +77,11 @@ DEEPSEEK_MODEL=deepseek-v4-pro
 
 输入 `退出`、`exit` 或 `quit` 可以结束会话。
 
+可尝试：
+
+- 「开户需要带什么材料？」→ 应检索并引用开户说明
+- 「今天 A 股大盘多少点？」→ 说明无法查实时行情，不编造
+
 ## 运行测试
 
 ```powershell
@@ -66,7 +95,9 @@ app/
 ├── agent.py       # DeepSeek 模型和 LangChain Agent 创建
 ├── cli.py         # 本地多轮对话入口
 ├── config.py      # 环境变量配置
-└── prompts.py     # 财经客服系统提示词
-tests/             # 配置和提示词边界测试
+├── prompts.py     # 财经客服系统提示词
+└── rag/           # 知识库索引与检索工具
+knowledge/         # 本地业务文档（RAG 语料）
+tests/             # 配置、提示词与 RAG 测试
 main.py            # 启动文件
 ```

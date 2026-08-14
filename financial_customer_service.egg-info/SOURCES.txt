@@ -5,11 +5,16 @@ app/agent.py
 app/cli.py
 app/config.py
 app/prompts.py
+app/rag/__init__.py
+app/rag/indexer.py
+app/rag/tools.py
 financial_customer_service.egg-info/PKG-INFO
 financial_customer_service.egg-info/SOURCES.txt
 financial_customer_service.egg-info/dependency_links.txt
 financial_customer_service.egg-info/entry_points.txt
 financial_customer_service.egg-info/requires.txt
 financial_customer_service.egg-info/top_level.txt
+tests/test_agent.py
 tests/test_config.py
 tests/test_prompt.py
+tests/test_rag.py
