@@ -25,6 +25,34 @@ def _message_text(message: Any) -> str:
     return str(content)
 
 
+def _stream_reply(agent: Any, messages: list[Any], question: str) -> list[Any]:
+    """按 token 打印回复，并用最终 state 更新多轮上下文。
+
+    ``invoke`` 一次返回完整 ``{"messages": [...]}``；
+    ``stream`` 返回迭代器，必须消费事件，不能再按字典取值。
+    """
+    print("\n财经客服：", end="", flush=True)
+    updated_messages = messages
+
+    # messages：模型 token；values：每步完整 state，最后一次即最终消息列表
+    for mode, chunk in agent.stream(
+        {"messages": [*messages, {"role": "user", "content": question}]},
+        stream_mode=["messages", "values"],
+    ):
+        if mode == "messages":
+            token, metadata = chunk
+            if metadata.get("langgraph_node") != "model":
+                continue
+            text = _message_text(token)
+            if text:
+                print(text, end="", flush=True)
+        elif mode == "values":
+            updated_messages = chunk["messages"]
+
+    print()
+    return updated_messages
+
+
 def run_cli() -> None:
     """启动一个在当前进程内保留上下文的财经客服会话。"""
     try:
@@ -51,12 +79,7 @@ def run_cli() -> None:
             return
 
         try:
-            result = agent.invoke(
-                {"messages": [*messages, {"role": "user", "content": question}]}
-            )
+            messages = _stream_reply(agent, messages, question)
         except Exception as exc:  # API/网络错误需要在命令行友好呈现
             print(f"\n调用 DeepSeek 失败：{exc}")
             continue
-
-        messages = result["messages"]
-        print(f"\n财经客服：{_message_text(messages[-1])}")
