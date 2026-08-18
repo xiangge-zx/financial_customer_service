@@ -21,9 +21,14 @@ INDEX_NAME = "index"
 
 
 def _create_embeddings(model_name: str) -> Embeddings:
+    import os
+
     from langchain_huggingface import HuggingFaceEmbeddings
 
-    return HuggingFaceEmbeddings(model_name=model_name)
+    # 即使 hub 常量已在 import 时读过环境变量，也强制只读本地缓存，避免 HEAD 探测外网。
+    offline = os.getenv("HF_HUB_OFFLINE", "").strip().lower() in {"1", "true", "yes"}
+    model_kwargs = {"local_files_only": True} if offline else {}
+    return HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs)
 
 
 def _list_source_files(knowledge_dir: Path) -> list[Path]:

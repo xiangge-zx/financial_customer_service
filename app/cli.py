@@ -1,5 +1,10 @@
 """本地多轮对话命令行。"""
 
+from dotenv import load_dotenv
+
+# huggingface_hub 在 import 时固化 HF_HUB_OFFLINE；必须先于 agent/rag 导入加载 .env
+load_dotenv()
+
 from typing import Any
 
 from app.agent import create_financial_agent

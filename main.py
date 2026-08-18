@@ -1,5 +1,9 @@
 """财经客服 Agent 的命令行入口。"""
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from app.cli import run_cli
 
 
