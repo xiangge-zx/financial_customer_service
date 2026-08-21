@@ -1,0 +1,29 @@
+{
+  "knowledge_dir": "D:\\demo\\ai_agent_learn\\financial_customer_service\\knowledge",
+  "embedding_model": "BAAI/bge-small-zh-v1.5",
+  "chunk_size": 500,
+  "chunk_overlap": 50,
+  "files": [
+    {
+      "path": "D:\\demo\\ai_agent_learn\\financial_customer_service\\knowledge\\常见问题.md",
+      "mtime": 1786546617.423928,
+      "size": 1016
+    },
+    {
+      "path": "D:\\demo\\ai_agent_learn\\financial_customer_service\\knowledge\\开户与账户.md",
+      "mtime": 1786546612.2927697,
+      "size": 1069
+    },
+    {
+      "path": "D:\\demo\\ai_agent_learn\\financial_customer_service\\knowledge\\理财产品说明.md",
+      "mtime": 1786546615.6554418,
+      "size": 1241
+    },
+    {
+      "path": "D:\\demo\\ai_agent_learn\\financial_customer_service\\knowledge\\资产核对说明.md",
+      "mtime": 1787065003.469999,
+      "size": 1203
+    }
+  ],
+  "content_hash": "da95085f25efbde93fd6a431f4178a88e06b5bae31820e38cba612b20286a35f"
+}

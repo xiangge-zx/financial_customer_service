@@ -24,6 +24,11 @@ class Settings:
     rag_chunk_overlap: int = 50
     rag_top_k: int = 4
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    mysql_host: str = "localhost"
+    mysql_port: int = 3306
+    mysql_user: str = "root"
+    mysql_password: str = ""
+    mysql_database: str = "customer"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -57,6 +62,11 @@ class Settings:
             embedding_model=os.getenv(
                 "EMBEDDING_MODEL", cls.embedding_model
             ).strip(),
+            mysql_host=os.getenv("MYSQL_HOST", cls.mysql_host).strip(),
+            mysql_port=int(os.getenv("MYSQL_PORT", cls.mysql_port)),
+            mysql_user=os.getenv("MYSQL_USER", cls.mysql_user).strip(),
+            mysql_password=os.getenv("MYSQL_PASSWORD", cls.mysql_password),
+            mysql_database=os.getenv("MYSQL_DATABASE", cls.mysql_database).strip(),
         )
         settings.validate()
         return settings
@@ -88,6 +98,14 @@ class Settings:
             raise ValueError("RAG_TOP_K 必须大于 0。")
         if not self.embedding_model:
             raise ValueError("EMBEDDING_MODEL 不能为空。")
+        if self.mysql_port <= 0:
+            raise ValueError("MYSQL_PORT 必须大于 0。")
+        if not self.mysql_host:
+            raise ValueError("MYSQL_HOST 不能为空。")
+        if not self.mysql_user:
+            raise ValueError("MYSQL_USER 不能为空。")
+        if not self.mysql_database:
+            raise ValueError("MYSQL_DATABASE 不能为空。")
 
     def resolve_knowledge_dir(self) -> Path:
         return Path(self.rag_knowledge_dir).expanduser().resolve()

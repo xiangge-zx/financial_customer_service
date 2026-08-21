@@ -1,14 +1,18 @@
-"""从 knowledge/ 构建或加载 FAISS 向量索引。"""
+"""从 knowledge/ 构建或加载向量索引。
+
+优先使用 FAISS；若运行环境未安装 faiss，则回退到轻量级本地检索实现，
+保证项目在开发/测试环境中仍可运行。
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -18,6 +22,72 @@ if TYPE_CHECKING:
 SUPPORTED_GLOBS = ("**/*.md", "**/*.txt")
 MANIFEST_NAME = "manifest.json"
 INDEX_NAME = "index"
+SIMPLE_INDEX_NAME = "index.simple.json"
+
+
+def _faiss_class():
+    try:
+        import faiss  # noqa: F401
+        from langchain_community.vectorstores import FAISS
+    except ImportError:
+        return None
+    return FAISS
+
+
+class SimpleLocalStore:
+    """FAISS 缺失时使用的最小可检索存储。"""
+
+    def __init__(self, documents: list[Document]) -> None:
+        self.documents = documents
+        # 与现有测试兼容：暴露 .index.ntotal
+        self.index = type("SimpleIndex", (), {"ntotal": len(documents)})()
+
+    @staticmethod
+    def _score(query: str, content: str) -> tuple[int, int]:
+        query_terms = [term for term in re_split(query) if term]
+        lowered = content.lower()
+        hits = sum(1 for term in query_terms if term.lower() in lowered)
+        # 次级排序：更短文本略优先，避免空文档被错误命中
+        return hits, -len(content)
+
+    def similarity_search(self, query: str, k: int = 4) -> list[Document]:
+        ranked = sorted(
+            self.documents,
+            key=lambda doc: self._score(query, doc.page_content or ""),
+            reverse=True,
+        )
+        return ranked[:k]
+
+    def save_local(self, folder_path: str, *, index_name: str = INDEX_NAME) -> None:
+        path = Path(folder_path)
+        path.mkdir(parents=True, exist_ok=True)
+        payload = [
+            {"page_content": doc.page_content, "metadata": doc.metadata}
+            for doc in self.documents
+        ]
+        (path / SIMPLE_INDEX_NAME).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load_local(cls, folder_path: str) -> "SimpleLocalStore":
+        path = Path(folder_path) / SIMPLE_INDEX_NAME
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        documents = [
+            Document(
+                page_content=item.get("page_content", ""),
+                metadata=item.get("metadata", {}),
+            )
+            for item in payload
+        ]
+        return cls(documents)
+
+
+def re_split(text: str) -> list[str]:
+    import re
+
+    return re.split(r"[\s,，。！？:：/\\|;；()\[\]{}]+", text or "")
 
 
 def _create_embeddings(model_name: str) -> Embeddings:
@@ -102,7 +172,10 @@ def _index_is_fresh(index_dir: Path, expected_manifest: dict) -> bool:
         return False
     faiss_file = index_dir / f"{INDEX_NAME}.faiss"
     pkl_file = index_dir / f"{INDEX_NAME}.pkl"
-    if not faiss_file.is_file() or not pkl_file.is_file():
+    simple_file = index_dir / SIMPLE_INDEX_NAME
+    if not (
+        (faiss_file.is_file() and pkl_file.is_file()) or simple_file.is_file()
+    ):
         return False
     return (
         existing.get("content_hash") == expected_manifest.get("content_hash")
@@ -140,20 +213,36 @@ def _split_documents(
     return splitter.split_documents(documents)
 
 
-def _create_empty_store(embeddings: Embeddings) -> FAISS:
-    return FAISS.from_texts(
+def _create_empty_store(embeddings: Embeddings) -> Any:
+    documents = [
+        Document(
+            page_content="知识库暂无可用文档。",
+            metadata={"source": "empty"},
+        )
+    ]
+    faiss_class = _faiss_class()
+    if faiss_class is None:
+        return SimpleLocalStore(documents)
+    return faiss_class.from_texts(
         texts=["知识库暂无可用文档。"],
         embedding=embeddings,
         metadatas=[{"source": "empty"}],
     )
 
 
+def _create_store(documents: list[Document], embeddings: Embeddings) -> Any:
+    faiss_class = _faiss_class()
+    if faiss_class is None:
+        return SimpleLocalStore(documents)
+    return faiss_class.from_documents(documents, embeddings)
+
+
 def build_or_load_vector_store(
     settings: Settings,
     *,
     embeddings: Embeddings | None = None,
-) -> FAISS:
-    """构建或复用 FAISS 索引；知识库为空时返回可检索的占位索引。"""
+) -> Any:
+    """构建或复用索引；知识库为空时返回可检索的占位索引。"""
     knowledge_dir = settings.resolve_knowledge_dir()
     index_dir = settings.resolve_index_dir()
     source_files = _list_source_files(knowledge_dir)
@@ -166,14 +255,17 @@ def build_or_load_vector_store(
     )
 
     resolved_embeddings = embeddings or _create_embeddings(settings.embedding_model)
+    faiss_class = _faiss_class()
 
     if _index_is_fresh(index_dir, expected_manifest):
-        return FAISS.load_local(
-            str(index_dir),
-            resolved_embeddings,
-            index_name=INDEX_NAME,
-            allow_dangerous_deserialization=True,
-        )
+        if faiss_class is not None and (index_dir / f"{INDEX_NAME}.faiss").is_file():
+            return faiss_class.load_local(
+                str(index_dir),
+                resolved_embeddings,
+                index_name=INDEX_NAME,
+                allow_dangerous_deserialization=True,
+            )
+        return SimpleLocalStore.load_local(str(index_dir))
 
     if not source_files:
         store = _create_empty_store(resolved_embeddings)
@@ -191,7 +283,7 @@ def build_or_load_vector_store(
     if not chunks:
         store = _create_empty_store(resolved_embeddings)
     else:
-        store = FAISS.from_documents(chunks, resolved_embeddings)
+        store = _create_store(chunks, resolved_embeddings)
 
     index_dir.mkdir(parents=True, exist_ok=True)
     store.save_local(str(index_dir), index_name=INDEX_NAME)
