@@ -242,7 +242,14 @@ def build_or_load_vector_store(
     *,
     embeddings: Embeddings | None = None,
 ) -> Any:
-    """构建或复用索引；知识库为空时返回可检索的占位索引。"""
+    """构建或复用本地向量索引，供 create_search_tool 使用。
+
+    流程概要：
+    1. 扫描 knowledge/ 源文件，算 manifest（路径、分块参数、embedding 模型）
+    2. 若 .rag_index/ 与 manifest 一致 → 直接 load，避免重复下载/向量化
+    3. 否则分块 + embedding 重建索引并落盘；无文档时建空占位索引
+    4. 未装 faiss 时回退 SimpleLocalStore，保证开发可跑
+    """
     knowledge_dir = settings.resolve_knowledge_dir()
     index_dir = settings.resolve_index_dir()
     source_files = _list_source_files(knowledge_dir)

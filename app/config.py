@@ -32,6 +32,10 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        """从环境变量 / .env 装配 Settings；缺 DEEPSEEK_API_KEY 则启动失败。
+
+        由 create_financial_agent 在未注入 settings 时调用。
+        """
         load_dotenv()
 
         api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()

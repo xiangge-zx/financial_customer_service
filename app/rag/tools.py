@@ -16,7 +16,11 @@ def _source_label(metadata: dict) -> str:
 
 
 def create_search_tool(vector_store: FAISS, *, top_k: int = 4):
-    """创建搜索项目知识库的 Tool。"""
+    """把向量库封装成可调用的检索函数（LangChain Tool）。
+
+    工作流 faq_rag 分支会 invoke 返回的 search_project_knowledge，
+    得到带 [来源: 文件名] 的证据文本，再交给 DeepSeek 生成回复。
+    """
 
     @tool
     def search_project_knowledge(query: str) -> str:
@@ -29,6 +33,7 @@ def create_search_tool(vector_store: FAISS, *, top_k: int = 4):
         if not question:
             return "检索词为空，请提供需要查询的业务问题。"
 
+        # 语义相似度 Top-K；top_k 来自 Settings.rag_top_k
         docs = vector_store.similarity_search(question, k=top_k)
         if not docs:
             return "知识库中没有找到相关内容。"

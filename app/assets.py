@@ -124,7 +124,11 @@ class MySQLAssetRepository:
 
 
 def create_asset_repository(settings: Settings) -> AssetRepository:
-    """根据配置创建资产仓储；未配置密码时回退占位实现。"""
+    """根据配置创建资产仓储，供工作流 asset_query 分支调用。
+
+    - 未配置 MYSQL_PASSWORD：返回 PlaceholderAssetRepository（只提示未连库，不尝试连接）
+    - 已配置：返回 MySQLAssetRepository，按 asset_code 查 customer.asset_dossier
+    """
     if not settings.mysql_password:
         return PlaceholderAssetRepository()
     return MySQLAssetRepository(

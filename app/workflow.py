@@ -186,7 +186,15 @@ def build_financial_workflow(
     asset_repo: AssetRepository,
     llm: Any,
 ) -> Any:
-    """创建可编译的 LangGraph 工作流。"""
+    """装配并 compile 财经客服图，由 create_financial_agent 调用。
+
+    依赖三项外部能力（均在 agent 层造好再注入）：
+    - llm：意图分类 + 最终回复
+    - search_tool：faq_rag 时检索 knowledge/
+    - asset_repo：asset_query 时查 MySQL asset_dossier
+
+    节点：understand → (tools|clarify) → respond|END。
+    """
 
     def understand(state: FinancialWorkflowState) -> dict[str, Any]:
         messages = state["messages"]
