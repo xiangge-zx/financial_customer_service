@@ -1,18 +1,25 @@
 """财经客服 Agent 的提示词模块。"""
 
+# 资产编号槽位追问文案（workflow clarify 节点与槽位识别共用）
+CLARIFY_ASSET_CODE_PROMPT = (
+    "我可以帮你查询资产信息。请提供资产编号"
+    "（格式示例：`FAJT221000600`）。"
+)
+
 # 现有工作流 description：供 DeepSeek 意图识别匹配使用。
 WORKFLOW_DESCRIPTIONS = """
 现有可匹配工作流：
 1. asset_query
-   - 描述：用户想按资产编码/资产编号/采购单号查询资产档案信息
-     （名称、类别等，数据来自 customer.asset_dossier）。
-   - 典型说法：「查一下资产 FAJT221000600」「资产编码是多少」「查询资产信息」
-   - 若用户要查资产但未给出编码，仍选 asset_query，并把 asset_id 留空。
+   - 描述：用户明确要查询资产档案信息（名称、品牌、规格等，数据来自 customer.asset_dossier）。
+   - 典型说法：「查一下资产 FAJT221000600」「帮我查询资产信息」「查询资产」
+   - 若用户要查资产但未给出资产编号，仍选 asset_query，并把 asset_code 留空。
+   - 若上一轮助手已在追问资产编号，本轮用户只回复编号（如 FAJT221000599），仍选 asset_query 并提取 asset_code。
 
 未匹配上述工作流时，一律选择 faq_rag（知识库问答兜底），包括：
 - 开户、理财、转账、挂失等业务 FAQ
 - 财经基础知识
 - 闲聊、问候、无法确定意图的问题
+- 用户只发送一个编号、且对话中未表达「查询/核对资产」意图时
 """.strip()
 
 
@@ -23,10 +30,12 @@ INTENT_CLASSIFICATION_SYSTEM_PROMPT = f"""
 
 分类规则：
 1. 仅当用户明确要查询某个资产档案/资产明细时，intent=asset_query。
-2. 其他所有情况 intent=faq_rag。
-3. asset_query 时尽量从原文提取 asset_id（如 FAJT221000600）；没有则 asset_id=null。
-4. confidence 表示你对分类的确信程度（0～1）。不确定时降低 confidence，并倾向 faq_rag。
-5. reason 用一句话说明分类依据。
+2. 上一轮已在补资产编号、本轮只提供编号时，intent=asset_query 并提取 asset_code。
+3. 用户只发编号且未表达查资产意图时，intent=faq_rag。
+4. 其他所有情况 intent=faq_rag。
+5. asset_query 时尽量从原文提取 asset_code（如 FAJT221000600）；没有则 asset_code=null。
+6. confidence 表示你对分类的确信程度（0～1）。不确定时降低 confidence，并倾向 faq_rag。
+7. reason 用一句话说明分类依据。
 """.strip()
 
 
@@ -39,7 +48,7 @@ FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT = """
 3. 遇到专业术语时，用普通用户能理解的语言解释；必要时给出简短示例。
 4. 信息不足且会影响结论时，明确指出缺少的信息并进行追问。
 5. 当提供了知识库检索证据时，优先基于证据作答，并可简要说明来源文档名称。
-6. 当提供了资产查询结构化结果时，基于该结果说明资产名称、类别等字段，不得编造未返回的字段。
+6. 当提供了资产查询结构化结果时，基于该结果说明资产名称、品牌、规格等字段，不得编造未返回的字段。
 
 你必须遵守以下边界：
 1. 不能声称已联网查询实时行情、账户余额、订单或未提供的外部系统数据。

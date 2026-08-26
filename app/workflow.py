@@ -12,13 +12,14 @@ from langgraph.graph import END, StateGraph
 from app.assets import AssetRepository
 from app.models import AssetQueryInput, FinancialWorkflowState, IntentClassification
 from app.prompts import (
+      CLARIFY_ASSET_CODE_PROMPT,
     FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT,
     INTENT_CLASSIFICATION_SYSTEM_PROMPT,
 )
 
 
 # LLM 失败时的兜底规则（不再作为主路径）
-_ASSET_ID_PATTERNS: list[re.Pattern[str]] = [
+_ASSET_CODE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"资产编号[:：]?\s*([A-Za-z0-9_-]{4,32})"),
     re.compile(r"资产编码[:：]?\s*([A-Za-z0-9_-]{4,32})"),
     re.compile(r"采购单号[:：]?\s*([A-Za-z0-9_-]{4,32})"),
@@ -40,13 +41,77 @@ _ASSET_INTENT_KEYWORDS = [
 
 _MIN_ASSET_CONFIDENCE = 0.55
 
+_RAG_REFUSE_MESSAGE = "你好 我是一个专业的财经智能客服 无法回答无关问题"
 
-def _extract_asset_id(text: str) -> str | None:
-    for pattern in _ASSET_ID_PATTERNS:
+_NO_EVIDENCE_MARKERS = (
+    "知识库中没有找到相关内容",
+    "知识库暂无可用文档",
+    "未检索到与问题相关的内容",
+    "检索词为空",
+)
+
+
+def _extract_asset_code(text: str) -> str | None:
+    for pattern in _ASSET_CODE_PATTERNS:
         match = pattern.search(text or "")
         if match:
             return cast(str, match.group(1)).strip()
     return None
+
+
+def _get_message_content(message: Any) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    return _message_text(message)
+
+
+def _is_clarify_response(content: str) -> bool:
+    return CLARIFY_ASSET_CODE_PROMPT in content
+
+
+def _is_awaiting_asset_code(messages: list[Any]) -> bool:
+    """上一轮助手是否在追问资产编号。"""
+    if len(messages) < 2:
+        return False
+    for message in reversed(messages[:-1]):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "assistant":
+            return _is_clarify_response(_get_message_content(message))
+        if role == "user":
+            break
+    return False
+
+
+def _build_classification_input(messages: list[Any], question: str) -> str:
+    """把最近几轮对话拼成意图分类输入，便于识别补槽轮次。"""
+    recent = messages[-6:]
+    parts: list[str] = []
+    for message in recent:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "unknown")
+        content = _get_message_content(message).strip()
+        if content:
+            parts.append(f"{role}: {content}")
+    return "\n".join(parts) if parts else question
+
+
+def _try_slot_fill_classification(
+    messages: list[Any],
+    question: str,
+) -> IntentClassification | None:
+    """确定性槽位回填：上一轮已追问资产编号，本轮只提供编号。"""
+    asset_code = _extract_asset_code(question)
+    if not asset_code or not _is_awaiting_asset_code(messages):
+        return None
+    return IntentClassification(
+        intent="asset_query",
+        asset_code=asset_code,
+        confidence=1.0,
+        reason="槽位回填：上一轮已追问资产编号，本轮提供编号",
+    )
 
 
 def _rule_based_classification(question: str) -> IntentClassification:
@@ -54,13 +119,13 @@ def _rule_based_classification(question: str) -> IntentClassification:
     if any(keyword in question for keyword in _ASSET_INTENT_KEYWORDS):
         return IntentClassification(
             intent="asset_query",
-            asset_id=_extract_asset_id(question),
+            asset_code=_extract_asset_code(question),
             confidence=0.6,
             reason="规则兜底：命中资产查询关键词",
         )
     return IntentClassification(
         intent="faq_rag",
-        asset_id=None,
+        asset_code=None,
         confidence=0.6,
         reason="规则兜底：未匹配资产查询工作流",
     )
@@ -87,10 +152,10 @@ def _parse_classification_payload(payload: Any) -> IntentClassification:
     raise TypeError(f"无法解析意图分类结果：{type(payload)!r}")
 
 
-def _classify_with_llm(llm: Any, question: str) -> IntentClassification:
+def _classify_with_llm(llm: Any, classification_input: str) -> IntentClassification:
     messages = [
         SystemMessage(content=INTENT_CLASSIFICATION_SYSTEM_PROMPT),
-        HumanMessage(content=question),
+        HumanMessage(content=classification_input),
     ]
     try:
         structured = llm.with_structured_output(IntentClassification)
@@ -103,14 +168,14 @@ def _classify_with_llm(llm: Any, question: str) -> IntentClassification:
                     *messages,
                     HumanMessage(
                         content=(
-                            "请只输出 JSON 对象，字段为 intent, asset_id, confidence, reason。"
+                            "请只输出 JSON 对象，字段为 intent, asset_code, confidence, reason。"
                         )
                     ),
                 ]
             )
             return _parse_classification_payload(raw)
         except Exception:
-            return _rule_based_classification(question)
+            return _rule_based_classification(classification_input)
 
 
 def _normalize_classification(
@@ -118,23 +183,23 @@ def _normalize_classification(
     question: str,
 ) -> IntentClassification:
     intent = classification.intent
-    asset_id = (classification.asset_id or "").strip() or None
+    asset_code = (classification.asset_code or "").strip() or None
     confidence = float(classification.confidence or 0.0)
 
     if intent == "asset_query" and confidence < _MIN_ASSET_CONFIDENCE:
         return IntentClassification(
             intent="faq_rag",
-            asset_id=None,
+            asset_code=None,
             confidence=confidence,
             reason=f"置信度不足，改为知识库兜底：{classification.reason}",
         )
 
-    if intent == "asset_query" and not asset_id:
-        asset_id = _extract_asset_id(question)
+    if intent == "asset_query" and not asset_code:
+        asset_code = _extract_asset_code(question)
 
     return IntentClassification(
         intent=intent,
-        asset_id=asset_id,
+        asset_code=asset_code,
         confidence=confidence,
         reason=classification.reason,
     )
@@ -154,6 +219,15 @@ def _message_text(message: Any) -> str:
     return str(content)
 
 
+def _is_rag_evidence_empty(evidence: str | None) -> bool:
+    if not evidence or not evidence.strip():
+        return True
+    text = evidence.strip()
+    if text == "（知识库未返回可用证据）":
+        return True
+    return any(marker in text for marker in _NO_EVIDENCE_MARKERS)
+
+
 def _build_respond_user_prompt(state: FinancialWorkflowState) -> str:
     question = state.get("last_question", "")
     route = state.get("route")
@@ -166,14 +240,14 @@ def _build_respond_user_prompt(state: FinancialWorkflowState) -> str:
             "请基于上述证据回答。证据不足时明确说明，不要编造。"
         )
 
-    if route == "asset_queryWithId":
-        asset_id = state.get("asset_id") or ""
+    if route == "asset_queryWithCode":
+        asset_code = state.get("asset_code") or ""
         result = state.get("asset_query_result") or {}
         return (
             f"用户问题：{question}\n\n"
-            f"资产编码：{asset_id}\n"
+            f"资产编码：{asset_code}\n"
             f"资产查询结构化结果（JSON）：\n{json.dumps(result, ensure_ascii=False, indent=2)}\n\n"
-            "请用自然语言向用户说明查询结果。"
+            "请用自然语言向用户说明查询结果（资产名称、品牌、规格等）。"
             "只能使用结果中的字段，不要编造未返回的数据。"
         )
 
@@ -201,21 +275,26 @@ def build_financial_workflow(
         last_user = messages[-1]["content"] if messages else ""
         question = str(last_user or "")
 
-        classification = _normalize_classification(
-            _classify_with_llm(llm, question),
-            question,
-        )
+        slot_fill = _try_slot_fill_classification(messages, question)
+        if slot_fill is not None:
+            classification = slot_fill
+        else:
+            classification_input = _build_classification_input(messages, question)
+            classification = _normalize_classification(
+                _classify_with_llm(llm, classification_input),
+                question,
+            )
 
         if classification.intent == "asset_query":
             route = (
-                "asset_queryWithId"
-                if classification.asset_id
-                else "asset_queryMissingId"
+                "asset_queryWithCode"
+                if classification.asset_code
+                else "asset_queryMissingCode"
             )
             return {
                 "intent": "asset_query",
                 "route": route,
-                "asset_id": classification.asset_id,
+                "asset_code": classification.asset_code,
                 "last_question": question,
                 "intent_confidence": classification.confidence,
                 "intent_reason": classification.reason,
@@ -224,7 +303,7 @@ def build_financial_workflow(
         return {
             "intent": "faq_rag",
             "route": "faq_rag",
-            "asset_id": None,
+            "asset_code": None,
             "last_question": question,
             "intent_confidence": classification.confidence,
             "intent_reason": classification.reason,
@@ -232,7 +311,7 @@ def build_financial_workflow(
 
     def route_router(state: FinancialWorkflowState) -> str:
         route = state.get("route")
-        if route in {"faq_rag", "asset_queryWithId"}:
+        if route in {"faq_rag", "asset_queryWithCode"}:
             return "tools"
         return "clarify"
 
@@ -244,41 +323,46 @@ def build_financial_workflow(
             evidence = search_tool.invoke(question)
             return {"rag_evidence": evidence}
 
-        if route == "asset_queryWithId":
-            asset_id = state.get("asset_id")
-            if not asset_id:
+        if route == "asset_queryWithCode":
+            asset_code = state.get("asset_code")
+            if not asset_code:
                 return {"asset_query_result": None}
-            query = AssetQueryInput(asset_id=asset_id)
-            result = asset_repo.query_asset_by_id(query)
+            query = AssetQueryInput(asset_code=asset_code)
+            result = asset_repo.query_asset_by_code(query)
             return {"asset_query_result": result.to_dict()}
 
         return {}
 
     def respond(state: FinancialWorkflowState) -> dict[str, Any]:
         messages = state["messages"]
-        reply_messages = [
-            SystemMessage(content=FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT),
-            HumanMessage(content=_build_respond_user_prompt(state)),
-        ]
-        try:
-            ai_message = llm.invoke(reply_messages)
-            content = _message_text(ai_message).strip()
-        except Exception as exc:
-            content = f"生成回复失败：{exc}"
 
-        if not content:
-            content = "抱歉，我暂时无法生成回复，请稍后重试。"
+        if state.get("route") == "faq_rag" and _is_rag_evidence_empty(
+            state.get("rag_evidence")
+        ):
+            content = _RAG_REFUSE_MESSAGE
+        else:
+            reply_messages = [
+                SystemMessage(content=FINANCIAL_CUSTOMER_SERVICE_SYSTEM_PROMPT),
+                HumanMessage(content=_build_respond_user_prompt(state)),
+            ]
+            try:
+                ai_message = llm.invoke(reply_messages)
+                content = _message_text(ai_message).strip()
+            except Exception as exc:
+                content = f"生成回复失败：{exc}"
+
+            if not content:
+                content = "抱歉，我暂时无法生成回复，请稍后重试。"
 
         assistant: dict[str, Any] = {"role": "assistant", "content": content}
         return {"messages": [*messages, assistant]}
 
     def clarify(state: FinancialWorkflowState) -> dict[str, Any]:
         messages = state["messages"]
-        content = (
-            "我可以帮你查询资产信息。请提供至少一个查询键："
-            "资产编号、资产编码 或 采购单号（格式示例：`资产编码：FAJT221000600`）。"
-        )
-        assistant: dict[str, Any] = {"role": "assistant", "content": content}
+        assistant: dict[str, Any] = {
+            "role": "assistant",
+            "content": CLARIFY_ASSET_CODE_PROMPT,
+        }
         return {"messages": [*messages, assistant]}
 
     workflow = StateGraph(FinancialWorkflowState)

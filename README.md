@@ -65,8 +65,8 @@ DEEPSEEK_MODEL=deepseek-v4-pro
 flowchart TD
     userInput[用户问题] --> understand[DeepSeek意图识别]
     understand --> route{匹配现有工作流}
-    route -->|asset_query有编码| assetQuery[MySQL资产查询]
-    route -->|asset_query缺编码| clarify[追问资产编码]
+    route -->|asset_query有asset_code| assetQuery[MySQL资产查询]
+    route -->|asset_query缺asset_code| clarify[追问资产编号]
     route -->|未匹配| retrieve[RAG知识库检索]
     retrieve --> respond[DeepSeek基于证据回复]
     assetQuery --> respond
@@ -74,17 +74,17 @@ flowchart TD
 
 工作流 description（供 DeepSeek 匹配）定义在 `app/prompts.py` 的 `WORKFLOW_DESCRIPTIONS`：
 
-- `asset_query`：按资产编码/编号查询 `asset_dossier` 中的资产名称与类别
+- `asset_query`：按资产编码/编号查询 `asset_dossier` 中的资产名称、品牌与规格
 - 其余一律走 `faq_rag` 知识库兜底
 
-缺编码时只追问必要参数，不调用空查询。
+缺 `asset_code` 时只追问资产编号，不调用空查询。
 
 ## 资产查询（MySQL）
 
 配置 `.env` 中的 `MYSQL_*` 后，工作流会执行如下参数化查询：
 
 ```sql
-SELECT ad.asset_name, ad.asset_category
+SELECT ad.asset_name, ad.brand, ad.spec
 FROM asset_dossier ad
 WHERE ad.asset_code = %s
 ```
@@ -117,8 +117,8 @@ WHERE ad.asset_code = %s
 可尝试：
 
 - 「开户需要带什么材料？」→ 应检索并引用开户说明
-- 「帮我查询资产信息，资产编码：FAJT221000600」→ 查询 `customer.asset_dossier` 并返回资产名称/类别
-- 「查询资产信息」→ 只追问资产编号或采购单号
+- 「帮我查询资产信息，资产编码：FAJT221000600」→ 查询 `customer.asset_dossier` 并返回资产名称/品牌/规格
+- 「查询资产信息」→ 只追问资产编号；下一轮提供编号后查 MySQL
 - 「今天 A 股大盘多少点？」→ 说明无法查实时行情，不编造
 
 ## 运行测试

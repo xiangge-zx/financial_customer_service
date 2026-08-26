@@ -13,7 +13,8 @@ if TYPE_CHECKING:
 SQL_ASSET_BY_CODE = """
 SELECT
   ad.asset_name,
-  ad.asset_category
+  ad.brand,
+  ad.spec
 FROM asset_dossier ad
 WHERE ad.asset_code = %s
 """.strip()
@@ -22,17 +23,17 @@ WHERE ad.asset_code = %s
 class AssetRepository(Protocol):
     """资产查询数据访问层。"""
 
-    def query_asset_by_id(self, query: AssetQueryInput) -> AssetQueryResult:
+    def query_asset_by_code(self, query: AssetQueryInput) -> AssetQueryResult:
         """按资产编码查询并返回结构化结果。"""
 
 
 class PlaceholderAssetRepository:
     """未配置数据库时使用的占位实现。"""
 
-    def query_asset_by_id(self, query: AssetQueryInput) -> AssetQueryResult:
+    def query_asset_by_code(self, query: AssetQueryInput) -> AssetQueryResult:
         return AssetQueryResult(
             status="not_connected",
-            asset_id=query.asset_id,
+            asset_code=query.asset_code,
             query_scope=query.query_scope,
             sql_template=SQL_ASSET_BY_CODE,
             message=(
@@ -60,14 +61,14 @@ class MySQLAssetRepository:
         self.password = password
         self.database = database
 
-    def query_asset_by_id(self, query: AssetQueryInput) -> AssetQueryResult:
+    def query_asset_by_code(self, query: AssetQueryInput) -> AssetQueryResult:
         try:
             import pymysql
             from pymysql.cursors import DictCursor
         except ImportError as exc:
             return AssetQueryResult(
                 status="error",
-                asset_id=query.asset_id,
+                asset_code=query.asset_code,
                 query_scope=query.query_scope,
                 sql_template=SQL_ASSET_BY_CODE,
                 message="缺少 pymysql 依赖，请执行 pip install pymysql。",
@@ -86,12 +87,12 @@ class MySQLAssetRepository:
                 read_timeout=10,
             ) as connection:
                 with connection.cursor() as cursor:
-                    cursor.execute(SQL_ASSET_BY_CODE, (query.asset_id,))
+                    cursor.execute(SQL_ASSET_BY_CODE, (query.asset_code,))
                     rows = cursor.fetchall()
         except Exception as exc:  # 连接/权限/SQL 错误统一转为可读提示
             return AssetQueryResult(
                 status="error",
-                asset_id=query.asset_id,
+                asset_code=query.asset_code,
                 query_scope=query.query_scope,
                 sql_template=SQL_ASSET_BY_CODE,
                 message=f"数据库查询失败：{exc}",
@@ -100,22 +101,23 @@ class MySQLAssetRepository:
         if not rows:
             return AssetQueryResult(
                 status="not_found",
-                asset_id=query.asset_id,
+                asset_code=query.asset_code,
                 query_scope=query.query_scope,
                 sql_template=SQL_ASSET_BY_CODE,
-                message=f"未在 {self.database}.asset_dossier 中找到资产编码 {query.asset_id}。",
+                message=f"未在 {self.database}.asset_dossier 中找到资产编码 {query.asset_code}。",
             )
 
         records = tuple(
             AssetRecord(
                 asset_name=row.get("asset_name"),
-                asset_category=row.get("asset_category"),
+                brand=row.get("brand"),
+                spec=row.get("spec"),
             )
             for row in rows
         )
         return AssetQueryResult(
             status="found",
-            asset_id=query.asset_id,
+            asset_code=query.asset_code,
             query_scope=query.query_scope,
             sql_template=SQL_ASSET_BY_CODE,
             records=records,

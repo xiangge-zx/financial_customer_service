@@ -13,8 +13,8 @@ Message = dict[str, Any]
 Intent = Literal["faq_rag", "asset_query"]
 Route = Literal[
     "faq_rag",
-    "asset_queryWithId",
-    "asset_queryMissingId",
+    "asset_queryWithCode",
+    "asset_queryMissingCode",
 ]
 
 
@@ -24,7 +24,7 @@ class IntentClassification(BaseModel):
     intent: Intent = Field(
         description="asset_query=匹配资产查询工作流；faq_rag=未匹配现有工作流，走知识库"
     )
-    asset_id: str | None = Field(
+    asset_code: str | None = Field(
         default=None,
         description="从用户问题中提取的资产编码/编号；仅 asset_query 时填写",
     )
@@ -48,7 +48,7 @@ class FinancialWorkflowState(TypedDict):
     # understand 节点输出
     intent: NotRequired[Intent]
     route: NotRequired[Route]
-    asset_id: NotRequired[str]
+    asset_code: NotRequired[str]
     last_question: NotRequired[str]
     intent_confidence: NotRequired[float]
     intent_reason: NotRequired[str]
@@ -60,7 +60,7 @@ class FinancialWorkflowState(TypedDict):
 
 @dataclass(frozen=True)
 class AssetQueryInput:
-    asset_id: str
+    asset_code: str
     # 后续扩展可把 query_scope 拓展成 legacy/new/both
     query_scope: Literal["legacy_and_new"] = "legacy_and_new"
 
@@ -68,12 +68,14 @@ class AssetQueryInput:
 @dataclass(frozen=True)
 class AssetRecord:
     asset_name: str | None
-    asset_category: str | None
+    brand: str | None
+    spec: str | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "asset_name": self.asset_name,
-            "asset_category": self.asset_category,
+            "brand": self.brand,
+            "spec": self.spec,
         }
 
 
@@ -82,7 +84,7 @@ class AssetQueryResult:
     """资产查询返回结果。"""
 
     status: Literal["found", "not_found", "error", "not_connected"]
-    asset_id: str
+    asset_code: str
     query_scope: Literal["legacy_and_new"]
     sql_template: str
     records: tuple[AssetRecord, ...] = ()
@@ -91,7 +93,7 @@ class AssetQueryResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
-            "asset_id": self.asset_id,
+            "asset_code": self.asset_code,
             "query_scope": self.query_scope,
             "sql_template": self.sql_template,
             "records": [record.to_dict() for record in self.records],

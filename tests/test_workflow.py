@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from langchain_core.embeddings import FakeEmbeddings
 from langchain_core.messages import AIMessage
@@ -6,6 +7,7 @@ from langchain_core.messages import AIMessage
 from app.assets import PlaceholderAssetRepository
 from app.config import Settings
 from app.models import IntentClassification
+from app.prompts import CLARIFY_ASSET_CODE_PROMPT
 from app.rag import build_or_load_vector_store, create_search_tool
 from app.workflow import build_financial_workflow
 
@@ -46,13 +48,12 @@ class FakeWorkflowLLM:
 
     def invoke(self, messages):  # noqa: ANN001
         self.respond_calls += 1
-        # JSON 兜底路径：structured_output 失败后会再 invoke 一次要求 JSON
         joined = " ".join(str(getattr(m, "content", m)) for m in messages)
-        if "只输出 JSON" in joined or "intent, asset_id, confidence, reason" in joined:
+        if "只输出 JSON" in joined or "intent, asset_code, confidence, reason" in joined:
             if self.raise_on_classify:
                 raise RuntimeError("json classify unavailable")
             return AIMessage(
-                content='{"intent":"faq_rag","asset_id":null,"confidence":0.4,"reason":"json fallback"}'
+                content='{"intent":"faq_rag","asset_code":null,"confidence":0.4,"reason":"json fallback"}'
             )
         return AIMessage(content=self.reply)
 
@@ -61,13 +62,14 @@ def _build_workflow(
     tmp_path: Path,
     *,
     llm: FakeWorkflowLLM | None = None,
+    search_tool=None,
+    asset_repo=None,
+    knowledge_text: str | None = "个人开户需要携带本人有效身份证件原件。",
 ):
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir()
-    (knowledge_dir / "开户FAQ.md").write_text(
-        "个人开户需要携带本人有效身份证件原件。",
-        encoding="utf-8",
-    )
+    if knowledge_text is not None:
+        (knowledge_dir / "开户FAQ.md").write_text(knowledge_text, encoding="utf-8")
 
     settings = Settings(
         api_key="offline-test-key",
@@ -76,14 +78,15 @@ def _build_workflow(
         rag_top_k=2,
         embedding_model="fake-embeddings",
     )
-    store = build_or_load_vector_store(
-        settings,
-        embeddings=FakeEmbeddings(size=16),
-    )
-    tool = create_search_tool(store, top_k=2)
+    if search_tool is None:
+        store = build_or_load_vector_store(
+            settings,
+            embeddings=FakeEmbeddings(size=16),
+        )
+        search_tool = create_search_tool(store, top_k=2)
     return build_financial_workflow(
-        search_tool=tool,
-        asset_repo=PlaceholderAssetRepository(),
+        search_tool=search_tool,
+        asset_repo=asset_repo or PlaceholderAssetRepository(),
         llm=llm or FakeWorkflowLLM(),
     )
 
@@ -110,12 +113,12 @@ def test_workflow_routes_faq_to_rag(tmp_path: Path) -> None:
     assert llm.respond_calls >= 1
 
 
-def test_workflow_routes_asset_query_with_id(tmp_path: Path) -> None:
+def test_workflow_routes_asset_query_with_code(tmp_path: Path) -> None:
     llm = FakeWorkflowLLM(
         classifications=[
             IntentClassification(
                 intent="asset_query",
-                asset_id="ABC12345",
+                asset_code="ABC12345",
                 confidence=0.95,
                 reason="用户要查资产",
             )
@@ -129,18 +132,18 @@ def test_workflow_routes_asset_query_with_id(tmp_path: Path) -> None:
     )
 
     assert result["intent"] == "asset_query"
-    assert result["route"] == "asset_queryWithId"
-    assert result["asset_id"] == "ABC12345"
+    assert result["route"] == "asset_queryWithCode"
+    assert result["asset_code"] == "ABC12345"
     assert result["asset_query_result"]["status"] == "not_connected"
     assert "ABC12345" in result["messages"][-1]["content"]
 
 
-def test_workflow_clarifies_when_asset_id_missing(tmp_path: Path) -> None:
+def test_workflow_clarifies_when_asset_code_missing(tmp_path: Path) -> None:
     llm = FakeWorkflowLLM(
         classifications=[
             IntentClassification(
                 intent="asset_query",
-                asset_id=None,
+                asset_code=None,
                 confidence=0.9,
                 reason="要查资产但没给编码",
             )
@@ -151,8 +154,91 @@ def test_workflow_clarifies_when_asset_id_missing(tmp_path: Path) -> None:
     result = workflow.invoke({"messages": [{"role": "user", "content": "我想查询资产信息"}]})
 
     assert result["intent"] == "asset_query"
-    assert result["route"] == "asset_queryMissingId"
-    assert "请提供至少一个查询键" in result["messages"][-1]["content"]
+    assert result["route"] == "asset_queryMissingCode"
+    assert "请提供资产编号" in result["messages"][-1]["content"]
+    assert result["messages"][-1]["content"] == CLARIFY_ASSET_CODE_PROMPT
+    assert llm.respond_calls == 0
+
+
+def test_workflow_slot_fill_after_clarify_queries_asset(tmp_path: Path) -> None:
+    llm = FakeWorkflowLLM(
+        classifications=[
+            IntentClassification(
+                intent="faq_rag",
+                confidence=0.9,
+                reason="若走到 LLM 说明槽位回填失败",
+            )
+        ],
+        reply="已根据资产编号查询到占位结果。",
+    )
+    asset_repo = MagicMock(wraps=PlaceholderAssetRepository())
+    workflow = _build_workflow(tmp_path, llm=llm, asset_repo=asset_repo)
+
+    result = workflow.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": "我想查询资产信息"},
+                {"role": "assistant", "content": CLARIFY_ASSET_CODE_PROMPT},
+                {"role": "user", "content": "FAJT221000599"},
+            ]
+        }
+    )
+
+    assert result["intent"] == "asset_query"
+    assert result["route"] == "asset_queryWithCode"
+    assert result["asset_code"] == "FAJT221000599"
+    assert result["asset_query_result"]["status"] == "not_connected"
+    assert llm.classify_calls == 0
+    asset_repo.query_asset_by_code.assert_called_once()
+    assert llm.respond_calls >= 1
+
+
+def test_workflow_bare_asset_code_without_intent_goes_rag(tmp_path: Path) -> None:
+    llm = FakeWorkflowLLM(
+        classifications=[
+            IntentClassification(
+                intent="faq_rag",
+                confidence=0.85,
+                reason="仅编号，未表达查资产",
+            )
+        ],
+        reply="请先说明是否需要查询资产信息。",
+    )
+    workflow = _build_workflow(tmp_path, llm=llm)
+
+    result = workflow.invoke(
+        {"messages": [{"role": "user", "content": "FAJT221000599"}]}
+    )
+
+    assert result["intent"] == "faq_rag"
+    assert result["route"] == "faq_rag"
+    assert "rag_evidence" in result
+
+
+def test_workflow_rag_no_evidence_returns_fixed_refuse(tmp_path: Path) -> None:
+    llm = FakeWorkflowLLM(
+        classifications=[
+            IntentClassification(
+                intent="faq_rag",
+                confidence=0.9,
+                reason="无关问题",
+            )
+        ],
+        reply="不应出现的模型自由发挥。",
+    )
+    empty_tool = MagicMock()
+    empty_tool.invoke.return_value = "知识库中没有找到相关内容。"
+    workflow = _build_workflow(tmp_path, llm=llm, search_tool=empty_tool)
+
+    result = workflow.invoke(
+        {"messages": [{"role": "user", "content": "今天天气怎么样"}]}
+    )
+
+    assert result["intent"] == "faq_rag"
+    assert result["route"] == "faq_rag"
+    assert result["messages"][-1]["content"] == (
+        "你好 我是一个专业的财经智能客服 无法回答无关问题"
+    )
     assert llm.respond_calls == 0
 
 
@@ -182,7 +268,7 @@ def test_workflow_low_confidence_asset_query_falls_back_to_rag(tmp_path: Path) -
         classifications=[
             IntentClassification(
                 intent="asset_query",
-                asset_id="ABC12345",
+                asset_code="ABC12345",
                 confidence=0.2,
                 reason="不太确定",
             )
@@ -209,6 +295,6 @@ def test_workflow_classify_failure_uses_rule_fallback(tmp_path: Path) -> None:
     )
 
     assert result["intent"] == "asset_query"
-    assert result["route"] == "asset_queryWithId"
-    assert result["asset_id"] == "FAJT221000600"
+    assert result["route"] == "asset_queryWithCode"
+    assert result["asset_code"] == "FAJT221000600"
     assert "规则兜底" in result["intent_reason"]
